@@ -5,6 +5,20 @@
 
 #include "UI.h"
 
+static uint8_t looperProgressActive = 0;
+static uint8_t looperProgressLastIndex = 0xff;
+static uint8_t looperProgressLastState = 0xff;
+static uint8_t looperProgressLastReverse = 0xff;
+static uint8_t looperProgressLastMute = 0xff;
+static uint8_t reverseCombinationArmed = 1;
+static uint8_t muteCombinationArmed = 1;
+static uint8_t restartCombinationArmed = 1;
+
+static void UI_clearLooperProgress(void);
+static void UI_renderLooperProgress(void);
+static uint8_t UI_looperProgressIndex(void);
+static void UI_looperProgressColor(uint8_t* R, uint8_t* G, uint8_t* B);
+
 /*
  * Initialize all the parts necessary to control and process the UI.
  */
@@ -49,9 +63,54 @@ void UI_render(void) {
 			//reset the timer value
 			UITimer.Instance->CNT = 0;
 			routingMatrix_updateButtonStates(&CVmatrix);
+			if(!buttonArray_isPressed(&(CVmatrix.ba), 0) || !buttonArray_isPressed(&(CVmatrix.ba), 10)){
+				reverseCombinationArmed = 1;
+			}
+			if(!buttonArray_isPressed(&(CVmatrix.ba), 1) || !buttonArray_isPressed(&(CVmatrix.ba), 10)){
+				muteCombinationArmed = 1;
+			}
+			if(!buttonArray_isPressed(&(CVmatrix.ba), 1) || !buttonArray_isPressed(&(CVmatrix.ba), 9)){
+				restartCombinationArmed = 1;
+			}
 			if(buttonArray_activeCombination(&(CVmatrix.ba)) == CALIBRATION_COMBINATION){
 				buttonArray_resetCombinations(&(CVmatrix.ba));
 				FXSelector_switchToCalibration();
+				//we don't want to update the matrix
+				matrixRefreshFlag = 0;
+			}
+			else if(buttonArray_activeCombination(&(CVmatrix.ba)) == REVERSE_PLAYBACK_COMBINATION){
+				buttonArray_resetCombinations(&(CVmatrix.ba));
+				if(FXSelector_selectedFX() == FX_LOOPER &&
+						(looper.state == PLAYBACK || looper.state == OVERDUB) &&
+						reverseCombinationArmed){
+					looper_toggleReversePlayback(&looper);
+					looperProgressLastReverse = 0xff;
+					reverseCombinationArmed = 0;
+				}
+				//we don't want to update the matrix
+				matrixRefreshFlag = 0;
+			}
+			else if(buttonArray_activeCombination(&(CVmatrix.ba)) == MUTE_PLAYBACK_COMBINATION){
+				buttonArray_resetCombinations(&(CVmatrix.ba));
+				if(FXSelector_selectedFX() == FX_LOOPER &&
+						looper.state == PLAYBACK &&
+						muteCombinationArmed){
+					looper_toggleMutePlayback(&looper);
+					looperProgressLastMute = 0xff;
+					muteCombinationArmed = 0;
+				}
+				//we don't want to update the matrix
+				matrixRefreshFlag = 0;
+			}
+			else if(buttonArray_activeCombination(&(CVmatrix.ba)) == RESTART_PLAYBACK_COMBINATION){
+				buttonArray_resetCombinations(&(CVmatrix.ba));
+				if(FXSelector_selectedFX() == FX_LOOPER &&
+						(looper.state == PLAYBACK || looper.state == OVERDUB) &&
+						restartCombinationArmed){
+					looper_restartPlayback(&looper);
+					looperProgressLastIndex = 0xff;
+					restartCombinationArmed = 0;
+				}
 				//we don't want to update the matrix
 				matrixRefreshFlag = 0;
 			}
@@ -82,6 +141,8 @@ void UI_render(void) {
 				if(loopButton_risingEdge(&loopButton)) {
 					looper.flag = 0;
 					looper.framePointer = 0;
+					looper_setReversePlayback(&looper, 0);
+					looper_setMutePlayback(&looper, 0);
 					looper.state = RECORD;
 					looper.previousState = ARMED;
 					loopButton_changeColor(&loopButton, LOOPLED_RECORD);
@@ -108,11 +169,21 @@ void UI_render(void) {
 					looper.flag = 1;
 				}
 				if(looper.endFramePosition >= BLINK_FRAME_THRESHOLD+BLINK_GUARD_INTERVAL) {
-					if(looper.framePointer >= looper.endFramePosition - BLINK_FRAME_THRESHOLD) {
-						loopButton_changeIntensity(&loopButton, 0);
+					if(looper_isReversePlayback(&looper)) {
+						if(looper.framePointer <= BLINK_FRAME_THRESHOLD) {
+							loopButton_changeIntensity(&loopButton, 0);
+						}
+						else if(looper.framePointer == looper.endFramePosition) {
+							loopButton_changeIntensity(&loopButton, LOOPLED_NORMAL_INTENSITY);
+						}
 					}
-					else if(looper.framePointer == 0) {
-						loopButton_changeIntensity(&loopButton, LOOPLED_NORMAL_INTENSITY);
+					else {
+						if(looper.framePointer >= looper.endFramePosition - BLINK_FRAME_THRESHOLD) {
+							loopButton_changeIntensity(&loopButton, 0);
+						}
+						else if(looper.framePointer == 0) {
+							loopButton_changeIntensity(&loopButton, LOOPLED_NORMAL_INTENSITY);
+						}
 					}
 				}
 				if(loopButton_risingEdge(&loopButton)) {
@@ -155,8 +226,10 @@ void UI_render(void) {
 			default:
 				break;
 			}
+			UI_renderLooperProgress();
 		}
 		if(FXSelector_justSwitchedTo(FX_FREQ_SHIFT)){
+			UI_clearLooperProgress();
 			loopButton_changeColor(&loopButton, LOOPLED_OFF);
 		}
 		break;
@@ -164,6 +237,9 @@ void UI_render(void) {
 		FXSelector_update();
 		if(FXSelector_justSwitchedTo(FX_LOOPER)) {
 			looper.state = ARMED;
+			looper_setReversePlayback(&looper, 0);
+			looper_setMutePlayback(&looper, 0);
+			UI_clearLooperProgress();
 			loopButton_changeColor(&loopButton, LOOPLED_ARMED);
 			loopButton_changeIntensity(&loopButton, LOOPLED_NORMAL_INTENSITY);
 		}
@@ -199,6 +275,123 @@ void UI_render(void) {
 	//update the state
 	current_UI_state++;
 	current_UI_state = current_UI_state%NUMBEROFUISTATES;
+}
+
+static void UI_clearLooperProgress(void){
+	if(looperProgressActive){
+		routingMatrix_forceSyncLEDsToDestinations(&CVmatrix);
+	}
+	looperProgressActive = 0;
+	looperProgressLastIndex = 0xff;
+	looperProgressLastState = 0xff;
+	looperProgressLastReverse = 0xff;
+	looperProgressLastMute = 0xff;
+}
+
+static uint8_t UI_looperProgressIndex(void){
+	uint32_t denominator;
+	uint32_t framePointer;
+	uint32_t progressIndex;
+
+	if(looper.state == RECORD){
+		denominator = MAX_FRAME_NUM;
+	}
+	else {
+		denominator = ((uint32_t)looper.endFramePosition) + 1;
+	}
+
+	if(denominator == 0){
+		return 0;
+	}
+
+	framePointer = looper.framePointer;
+	if(framePointer >= denominator){
+		framePointer = denominator - 1;
+	}
+
+	progressIndex = (framePointer * RGBLEDARRAY_SIZE) / denominator;
+	if(progressIndex >= RGBLEDARRAY_SIZE){
+		progressIndex = RGBLEDARRAY_SIZE - 1;
+	}
+
+	return (uint8_t)progressIndex;
+}
+
+static void UI_looperProgressColor(uint8_t* R, uint8_t* G, uint8_t* B){
+	switch(looper.state){
+	case RECORD:
+		*R = 255;
+		*G = 0;
+		*B = 0;
+		break;
+	case PLAYBACK:
+		if(looper_isMutePlayback(&looper)){
+			*R = 0;
+			*G = 255;
+			*B = 0;
+		}
+		else if(looper_isReversePlayback(&looper)){
+			*R = 0;
+			*G = 180;
+			*B = 255;
+		}
+		else {
+			*R = 0;
+			*G = 0;
+			*B = 255;
+		}
+		break;
+	case OVERDUB:
+		*R = 255;
+		*G = looper_isReversePlayback(&looper) ? 90 : 0;
+		*B = 255;
+		break;
+	case ERASE:
+		*R = 255;
+		*G = 255;
+		*B = 255;
+		break;
+	default:
+		*R = 0;
+		*G = 0;
+		*B = 0;
+		break;
+	}
+}
+
+static void UI_renderLooperProgress(void){
+	uint8_t progressIndex;
+	uint8_t R, G, B;
+
+	if(looper.state == ARMED){
+		UI_clearLooperProgress();
+		return;
+	}
+
+	progressIndex = UI_looperProgressIndex();
+	if(looperProgressActive &&
+			looperProgressLastIndex == progressIndex &&
+			looperProgressLastState == looper.state &&
+			looperProgressLastReverse == looper_isReversePlayback(&looper) &&
+			looperProgressLastMute == looper_isMutePlayback(&looper)){
+		return;
+	}
+
+	UI_looperProgressColor(&R, &G, &B);
+	for(uint8_t i=0; i<RGBLEDARRAY_SIZE; i++){
+		if(i == progressIndex){
+			RGBLEDArray_setLEDColor(&CVmatrix.la, i, R, G, B);
+		}
+		else {
+			RGBLEDArray_setLEDColor(&CVmatrix.la, i, 0, 0, 0);
+		}
+	}
+
+	looperProgressActive = 1;
+	looperProgressLastIndex = progressIndex;
+	looperProgressLastState = looper.state;
+	looperProgressLastReverse = looper_isReversePlayback(&looper);
+	looperProgressLastMute = looper_isMutePlayback(&looper);
 }
 
 /*

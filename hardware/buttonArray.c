@@ -72,6 +72,18 @@ void buttonArray_checkCombinations(buttonArray_t* ba){
 		if(++(ba->longPressCounter) > BUTTON_ARRAY_LONG_PRESS){
 			ba->activeCombination = CALIBRATION_COMBINATION;
 		}
+	}else if(buttonArray_isPressed(ba,0) && buttonArray_isPressed(ba,10)){
+		if(++(ba->longPressCounter) > BUTTON_ARRAY_LONG_PRESS){
+			ba->activeCombination = REVERSE_PLAYBACK_COMBINATION;
+		}
+	}else if(buttonArray_isPressed(ba,1) && buttonArray_isPressed(ba,10)){
+		if(++(ba->longPressCounter) > BUTTON_ARRAY_LONG_PRESS){
+			ba->activeCombination = MUTE_PLAYBACK_COMBINATION;
+		}
+	}else if(buttonArray_isPressed(ba,1) && buttonArray_isPressed(ba,9)){
+		if(++(ba->longPressCounter) > BUTTON_ARRAY_LONG_PRESS){
+			ba->activeCombination = RESTART_PLAYBACK_COMBINATION;
+		}
 	}else{
 		ba->longPressCounter = 0;
 		ba->activeCombination = NO_COMBINATION;

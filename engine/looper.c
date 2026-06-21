@@ -10,6 +10,12 @@
 #include "ADC.h"
 #include "logLUT.h"
 #include "fadeLUT.h"
+#include "movingAverageFilter.h"
+
+movingAverageFilterINT_t bitcrushCVFilter;
+movingAverageFilterINT_t sampleRateReducerCVFilter;
+uint32_t bitcrushCVFilterMem[LOOPER_EFFECT_CV_MA_LENGTH];
+uint32_t sampleRateReducerCVFilterMem[LOOPER_EFFECT_CV_MA_LENGTH];
 
 void looper_init(looper_t* l) {
 	l->state = ARMED;
@@ -17,8 +23,61 @@ void looper_init(looper_t* l) {
 	l->doFadeOut = 0;
 	l->doOverdubFadeIn = 0;
 	l->doOverdubFadeOut = 0;
+	l->reversePlayback = 0;
+	l->mutePlayback = 0;
+	movingAverageFilterINT_init(&bitcrushCVFilter, bitcrushCVFilterMem, LOOPER_EFFECT_CV_MA_LENGTH);
+	movingAverageFilterINT_init(&sampleRateReducerCVFilter, sampleRateReducerCVFilterMem, LOOPER_EFFECT_CV_MA_LENGTH);
 }
 
+void looper_setReversePlayback(looper_t* l, uint8_t enabled) {
+	l->reversePlayback = enabled ? 1 : 0;
+}
+
+void looper_toggleReversePlayback(looper_t* l) {
+	l->reversePlayback = l->reversePlayback ? 0 : 1;
+}
+
+uint8_t looper_isReversePlayback(looper_t* l) {
+	return l->reversePlayback;
+}
+
+void looper_setMutePlayback(looper_t* l, uint8_t enabled) {
+	l->mutePlayback = enabled ? 1 : 0;
+}
+
+void looper_toggleMutePlayback(looper_t* l) {
+	l->mutePlayback = l->mutePlayback ? 0 : 1;
+}
+
+uint8_t looper_isMutePlayback(looper_t* l) {
+	return l->mutePlayback;
+}
+
+void looper_restartPlayback(looper_t* l) {
+	if(l->reversePlayback) {
+		l->framePointer = l->endFramePosition;
+	}
+	else {
+		l->framePointer = 0;
+	}
+}
+
+static void looper_advanceFramePointer(looper_t* l) {
+	if(l->reversePlayback) {
+		if(l->framePointer == 0) {
+			l->framePointer = l->endFramePosition;
+		}
+		else {
+			l->framePointer--;
+		}
+	}
+	else {
+		l->framePointer++;
+		if(l->framePointer > l->endFramePosition) {
+			l->framePointer = 0;
+		}
+	}
+}
 
 void looper_process(looper_t * l) {
 	uint8_t i;
@@ -68,10 +127,7 @@ void looper_process(looper_t * l) {
 		//get frame from RAM
 		RAM_readFrame(l->memory, l->framePointer, &processingFrame);
 		//		update frame pointer
-		l->framePointer++;
-		if(l->framePointer > l->endFramePosition) {
-			l->framePointer = 0;
-		}
+		looper_advanceFramePointer(l);
 		//		decode the frame
 		decodeFrame(&processingFrame, looperSampleBuffer_dry);
 		//		decodeFrame(&processingFrame, user_audio_out_buffer.buffer);
@@ -80,22 +136,29 @@ void looper_process(looper_t * l) {
 		//decompress frame
 		decodeFrame(&processingFrame, user_audio_out_buffer.buffer);
 		//add the contents of the buffer to the decoded frame
-		for(i=0; i<USER_AUDIO_IO_BUFFER_SIZE; i++) {
-			if ((looperSampleBuffer_dry[i] > 0 && user_audio_in_buffer.buffer[i] > INT16_MAX - looperSampleBuffer_dry[i]) ||
-					(user_audio_in_buffer.buffer[i] > 0 && looperSampleBuffer_dry[i] > INT16_MAX - user_audio_in_buffer.buffer[i]))
-			{
-				/* Oh no, overflow */
-				user_audio_out_buffer.buffer[i] = INT16_MAX;
+		if(l->mutePlayback) {
+			for(i=0; i<USER_AUDIO_IO_BUFFER_SIZE; i++) {
+				user_audio_out_buffer.buffer[i] = user_audio_in_buffer.buffer[i];
 			}
-			else if((looperSampleBuffer_dry[i] < 0 && user_audio_in_buffer.buffer[i] < INT16_MIN - looperSampleBuffer_dry[i]) ||
-					(user_audio_in_buffer.buffer[i] < 0 && looperSampleBuffer_dry[i] < INT16_MIN - user_audio_in_buffer.buffer[i]))
-			{
-				/* Oh no, underflow */
-				user_audio_out_buffer.buffer[i] = INT16_MIN;
-			}
-			else
-			{
-				user_audio_out_buffer.buffer[i] = user_audio_in_buffer.buffer[i] + looperSampleBuffer_dry[i];
+		}
+		else {
+			for(i=0; i<USER_AUDIO_IO_BUFFER_SIZE; i++) {
+				if ((looperSampleBuffer_dry[i] > 0 && user_audio_in_buffer.buffer[i] > INT16_MAX - looperSampleBuffer_dry[i]) ||
+						(user_audio_in_buffer.buffer[i] > 0 && looperSampleBuffer_dry[i] > INT16_MAX - user_audio_in_buffer.buffer[i]))
+				{
+					/* Oh no, overflow */
+					user_audio_out_buffer.buffer[i] = INT16_MAX;
+				}
+				else if((looperSampleBuffer_dry[i] < 0 && user_audio_in_buffer.buffer[i] < INT16_MIN - looperSampleBuffer_dry[i]) ||
+						(user_audio_in_buffer.buffer[i] < 0 && looperSampleBuffer_dry[i] < INT16_MIN - user_audio_in_buffer.buffer[i]))
+				{
+					/* Oh no, underflow */
+					user_audio_out_buffer.buffer[i] = INT16_MIN;
+				}
+				else
+				{
+					user_audio_out_buffer.buffer[i] = user_audio_in_buffer.buffer[i] + looperSampleBuffer_dry[i];
+				}
 			}
 		}
 
@@ -168,10 +231,7 @@ void looper_process(looper_t * l) {
 		//write the frame
 		RAM_writeFrame(l->memory, l->framePointer, &processingFrame);
 		//update frame pointer
-		l->framePointer++;
-		if(l->framePointer > l->endFramePosition) {
-			l->framePointer = 0;
-		}
+		looper_advanceFramePointer(l);
 		//need to decode the frame to avoid buffer corruption
 		decodeFrame(&processingFrame, looperSampleBuffer_dry);
 		//send to output buffer
@@ -198,7 +258,8 @@ void looper_process(looper_t * l) {
 
 void looper_process_bitcrush(int16_t* inputBuffer, int16_t* outputBuffer, uint16_t ADCValue) {
 	uint8_t i, bitReduction_integerPart;
-	volatile float bitReduction = (logLUT_12bit[ADCValue]*(16.0-LOOPER_MIN_BITDEPTH))/4095.0;
+	movingAverageFilterINT_process(&bitcrushCVFilter, ADCValue);
+	volatile float bitReduction = (logLUT_12bit[bitcrushCVFilter.output]*(16.0-LOOPER_MIN_BITDEPTH))/4095.0;
 	uint16_t tempSample1, tempSample2;
 
 	bitReduction_integerPart = (uint8_t) bitReduction;
@@ -227,12 +288,17 @@ void looper_process_bitcrush(int16_t* inputBuffer, int16_t* outputBuffer, uint16
 
 void looper_process_sampleRateReducer(int16_t* inputBuffer, int16_t* outputBuffer, uint16_t ADCValue) {
 	const uint8_t decimationFactors[7] = {1, 2, 4, 8, 16, 32, 64};
-	volatile float decimationFactor = ((ADCValue*6)/4095.0);
+	movingAverageFilterINT_process(&sampleRateReducerCVFilter, ADCValue);
+	volatile float decimationFactor = ((sampleRateReducerCVFilter.output*6)/4095.0);
 
 	uint8_t i, decimationFactor_integerPart;
 	int16_t tempSample1, tempSample2;
 
 	decimationFactor_integerPart = (uint8_t) decimationFactor;
+	if(decimationFactor_integerPart >= 6) {
+		decimationFactor_integerPart = 5;
+		decimationFactor = 6.0;
+	}
 
 	for(i=0; i<USER_AUDIO_IO_BUFFER_SIZE; i++) {
 		if((i%decimationFactors[decimationFactor_integerPart]) == 0) {

@@ -29,6 +29,7 @@
  */
 #define LOOPER_MIN_BITDEPTH 1
 #define LOOPER_MAX_DECIMATION_FACTOR 8
+#define LOOPER_EFFECT_CV_MA_LENGTH 8
 
 #define BITCRUSHER_LOWER_LIMIT -10
 #define BITCRUSHER_UPPER_LIMIT 10
@@ -54,12 +55,21 @@ typedef struct {
 	uint8_t doFadeOut;
 	uint8_t doOverdubFadeIn;
 	uint8_t doOverdubFadeOut;
+	uint8_t reversePlayback;
+	uint8_t mutePlayback;
 } looper_t;
 
 looper_t looper;
 
 void looper_init(looper_t* l);
 void looper_process(looper_t * l);
+void looper_setReversePlayback(looper_t* l, uint8_t enabled);
+void looper_toggleReversePlayback(looper_t* l);
+uint8_t looper_isReversePlayback(looper_t* l);
+void looper_setMutePlayback(looper_t* l, uint8_t enabled);
+void looper_toggleMutePlayback(looper_t* l);
+uint8_t looper_isMutePlayback(looper_t* l);
+void looper_restartPlayback(looper_t* l);
 void looper_process_bitcrush(int16_t* inputBuffer, int16_t* outputBuffer, uint16_t ADCValue);
 void looper_process_sampleRateReducer(int16_t* inputBuffer, int16_t* outputBuffer, uint16_t ADCValue);
 

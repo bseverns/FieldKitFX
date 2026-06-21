@@ -94,8 +94,10 @@ void frequencyShifter_processSample(frequencyShifter_t* freqShifter, int16_t* sa
 }
 
 void frequencyShifter_updateCVs(frequencyShifter_t* freqShifter) {
+	const uint32_t centerAmount = ADC_RESOLUTION_DEZ / 2;
 	//scale the CV values and update the CV filters
 	volatile uint32_t temp_amount = ADC_getMixedCV2() &(0xff0);
+	uint32_t filteredAmount;
 
 	/*
 	 * WITH CV FILTERING
@@ -106,6 +108,12 @@ void frequencyShifter_updateCVs(frequencyShifter_t* freqShifter) {
 	movingAverageFilterINT_process(freqShifter->sidebandControlMAFilter, ADC_getMixedCV1());
 
 	//then make the actual changes
-	frequencyShifter_setShiftAmt(freqShifter, freqCVLUT[ADC_RESOLUTION_DEZ - freqShifter->shiftAmountMAFilter->output]);
+	filteredAmount = freqShifter->shiftAmountMAFilter->output;
+	if((filteredAmount >= (centerAmount - FREQLOCK_THRESHOLD)) && (filteredAmount <= (centerAmount + FREQLOCK_THRESHOLD))){
+		frequencyShifter_setShiftAmt(freqShifter, 0);
+	}
+	else {
+		frequencyShifter_setShiftAmt(freqShifter, freqCVLUT[ADC_RESOLUTION_DEZ - filteredAmount]);
+	}
 	frequencyShifter_setSideBandXfade(freqShifter, (float)(freqShifter->sidebandControlMAFilter->output)/(float)(ADC_RESOLUTION_DEZ));
 }
